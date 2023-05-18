@@ -1,0 +1,303 @@
+---
+title: "ML_FinalProject"
+author: "Group"
+date: "2023-04-23"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+#1. library
+```{r,warning=FALSE}
+library(r02pro) #INSTALL IF NECESSARY
+library(tidyverse) #INSTALL IF NECESSARY
+library(MASS)
+library(tree)
+library(dplyr)
+library(caret)
+library(randomForest)
+library(pROC)
+library(ggplot2)
+library(mlbench)
+library(keras)
+library(tfdatasets)
+library(caret)
+library(dplyr)
+```
+
+
+
+# 1. import data
+```{r,warning = FALSE}
+#California_Houses <- read.csv("California_Houses.csv")
+set.seed(123)
+California_Houses_reg <- California_Houses %>% dplyr::select(-Latitude, -Longitude) %>% na.omit()
+
+train_idx <- sample(nrow(California_Houses_reg), nrow(California_Houses_reg) * 0.1)
+train_df <- California_Houses_reg[train_idx, ]
+test_df <- California_Houses_reg[-train_idx, ]
+```
+
+# 2. Scale all features into the interval $[0, 1]$.
+```{r}
+std_fit <- preProcess(train_df, method = "scale")
+train_std <- predict(std_fit, newdata = train_df)
+std_fit_test <- preProcess(test_df, method = "scale")
+test_std <- predict(std_fit_test, newdata = test_df)
+```
+
+
+
+# 3. Decision Tree
+```{r}
+#decision tree with CV pruning.
+
+my_control <- tree.control(nrow(train_std),mincut=50, minsize = 200, mindev = 0)
+fit <- tree(Median_House_Value ~ . ,control = my_control,data = train_std)
+set.seed(0)
+cv.fit <- cv.tree(fit)
+cv.fit_df <- data.frame(size = cv.fit$size, deviance = cv.fit$dev)
+least_dev <- min(cv.fit$dev)
+best_size <- min(cv.fit$size[cv.fit$dev == least_dev])
+
+ggplot(cv.fit_df, mapping = aes(x = size, y = deviance)) +
+geom_point(size = 1) +
+geom_line() +
+geom_vline(xintercept = best_size, col = "red")
+
+
+fit.tree<-prune.tree(fit, best = best_size)
+pred_fit <- predict(fit.tree, newdata = train_std)
+train_error_dt<- mean((pred_fit - train_std$Median_House_Value)^2)
+
+
+pred_fit_te<- predict(fit.tree,newdata = test_std)
+test_error_dt<- mean((pred_fit_te - test_std$Median_House_Value)^2)
+
+
+plot(fit.tree)
+text(fit.tree,  all = TRUE, cex = 0.5)
+
+#Evaluation
+summary(fit.tree)
+
+```
+
+# 4.Random Forest
+```{r}
+set.seed(1)
+randomforest <- randomForest(Median_House_Value ~ .,data = train_std,importance = TRUE)
+pred_rf<- predict(randomforest, newdata =train_std)
+train_error_rf<- mean((pred_rf - train_std$Median_House_Value)^2)
+train_error_rf
+
+pred_rf_te<- predict(randomforest, newdata =test_std)
+test_error_rf<- mean((pred_rf_te - test_std$Median_House_Value)^2)
+test_error_rf
+
+#Evaluation
+importance(randomforest)
+varImpPlot(randomforest)
+
+```
+
+
+# Knn regression
+```{r, eval = TRUE}
+library(ISLR)
+library(caret)
+
+data(train_std)
+df <- as.data.frame(train_std)
+
+
+df$Median_House_Value <- as.numeric(df$Median_House_Value)
+
+
+train_std$Median_House_Value <- df$Median_House_Value
+
+k_seq <- seq(from = 1, to = 20, by = 1)
+
+set.seed(123)
+k_fold <- createFolds(train_std$Median_House_Value, k = 10)
+CV_error <- sapply(k_seq, function(k) {
+  mean(sapply(seq_along(k_fold), function(i) {
+   
+    train <- train_std[-k_fold[[i]],]
+    test <- train_std[k_fold[[i]],]
+
+    fit_knn <- knnreg(train[, -12], train$Median_House_Value, k = k)
+
+    pred <- predict(fit_knn, newdata = test[, -12])
+    mean((pred - test$Median_House_Value)^2)
+  }))
+})
+
+
+best_k <- k_seq[which.min(CV_error)]
+best_k
+
+plot(k_seq, CV_error, type = "b", xlab = "k", ylab = "Mean Squared Error")
+abline(v = best_k, col = "red")
+
+```
+
+
+
+
+
+
+```{r}
+
+
+  pred_knn <- knnreg(Median_House_Value ~ ., data = train_std, k = 4)
+  y_train_hat_knn <- predict(pred_knn, newdata = train_std)
+ train_error_knn<- mean((train_std$Median_House_Value - y_train_hat_knn)^2)
+ train_error_knn
+  y_test_hat_knn <- predict(pred_knn, newdata = test_std)
+ test_error_knn<-  mean((test_std$Median_House_Value - y_test_hat_knn)^2)
+  test_error_knn
+
+  
+  ggplot(data = test_std, aes(x = Median_House_Value, y = y_test_hat_knn)) + 
+  geom_point(color = "blue", alpha = 0.5) + 
+  geom_abline(color = "red", size = 1) +
+  xlab("True Median House Value") + 
+  ylab("Predicted Median House Value") + 
+  ggtitle("Scatter Plot of True and Predicted Median House Value")
+  
+  
+  plot(test_std$Median_House_Value, y_test_hat_knn, main = "Actual vs Predicted Values", xlab = "Actual Values", ylab = "Predicted Values")
+abline(0, 1, col = "red")
+
+```
+
+
+##Deep learning
+
+Scale x and y into the interval $[0, 1]$ seperately.
+```{r}
+train_x_std <- train_std %>% dplyr::select(-Median_House_Value)
+train_y_std <- train_std$Median_House_Value
+test_x_std <- test_std %>% dplyr::select(-Median_House_Value)
+test_y_std <- test_std$Median_House_Value
+ train_x_mat<- as.matrix(train_x_std)
+test_x_mat <- as.matrix(test_x_std)
+
+```
+
+1. Setup the layers
+```{r}
+ptrain <- ncol(train_x_std)
+model <- keras_model_sequential()
+model %>%
+  layer_dense(
+    units = 64,
+    activation = 'relu',
+    input_shape = c(ptrain)
+  )   %>%
+  layer_dense(units = 1, activation = 'linear')
+summary(model)
+```
+
+Improve the model with 2 additional hidden layers
+```{r}
+ptrain <- ncol(train_x_std)
+model <- keras_model_sequential()
+model %>%
+  layer_dense(
+    units = 64,
+    activation = 'relu',
+    input_shape = c(ptrain)
+  ) %>%
+  layer_dense(
+    units = 64,
+    activation = 'relu'
+  ) %>%
+  layer_dense(
+    units = 64,
+    activation = 'relu'
+  ) %>%
+  layer_dense(units = 1, activation = 'linear')
+summary(model)
+```
+
+
+2. Compile the model
+```{r,warning=FALSE}
+model %>% compile(
+  loss = 'mean_squared_error',
+  optimizer = optimizer_rmsprop(),
+  metrics = c('mse')
+)
+```
+
+3. Train the model
+```{r}
+history <- model %>% fit(
+  train_x_mat,
+  train_y_std,
+  epochs = 10,
+  batch_size = 16,
+  validation_split = 0.1
+)
+```
+
+
+4. Evaluate the accuracy
+```{r}
+score <- model %>% evaluate(test_x_mat, test_y_std, verbose = 0)
+cat('Test loss:', score["loss"], "\n")
+```
+
+5. Make predictions
+```{r}
+y_hat <- model %>% predict(train_x_mat)
+y_pred <- model %>% predict(test_x_mat)
+train_error_dl<-mean((y_hat - train_y_std)^2)
+test_error_dl<-mean((y_pred - test_y_std)^2)
+train_error_dl
+test_error_dl
+
+```
+
+```{r}
+
+# 创建数据框
+model_names <- c("Random Forest", "Decision Tree", "KNN Regression","Deep Learning")
+train_errors <- c(train_error_rf, train_error_dt, train_error_knn,train_error_dl)
+test_errors <- c(test_error_rf, test_error_dt, test_error_knn,test_error_dl)
+errors_df <- data.frame(model_names, train_errors, test_errors)
+errors_df
+# 绘制图表
+ggplot(errors_df, aes(x = model_names, y = train_errors, fill = "Training")) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_bar(aes(y = test_errors, fill = "Testing"), stat = "identity", position = "dodge") +
+  scale_fill_manual(values = c("#00AFBB", "#E7B800")) +
+  scale_y_continuous(limits=c(0,0.5)) +
+  scale_x_discrete(limits=c("Random Forest", "Decision Tree", "KNN Regression","Deep Learning")) +
+  labs(x = "Model", y = "Mean Squared Error", fill = "") +
+  ggtitle("Comparison of Model Errors on Training and Testing Sets") +
+  theme_minimal()
+
+
+
+
+```
+
+
+
+
+
+# 5. visualization
+```{r}
+index<- seq_len(nrow(train_std))
+cp<- rbind(data.frame(Index = index, Price = pred_fit, type = "decision_tree_train"),
+      data.frame(Index = index, Price = pred_rf, type = "randomForest_train"),
+      #data.frame(Index = index, Price = pred_knn, type = "knn_train"),
+      data.frame(Index = index, Price = train_std$Median_House_Value, type = "train_std"))
+ggplot(cp, mapping = aes(x = Index, y = Price, color = type)) +
+geom_point()
+```
+
